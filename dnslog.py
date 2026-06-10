@@ -192,7 +192,7 @@ def start_websocket():
 
 @app.route("/")
 def index():
-    resp = render_template("index.html")
+    resp = render_template("index.html", domain=DOMAIN)
     return resp.replace("<head>", "<head><meta http-equiv='Cache-Control' content='no-cache, no-store, must-revalidate'>")
 
 

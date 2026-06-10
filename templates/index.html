@@ -92,7 +92,7 @@ tr:hover td{background:#161b22}
 <div class="toast" id="toast"></div>
 
 <script>
-const DOMAIN = location.hostname === 'localhost' ? 'log.example.com' : location.hostname.replace(/^.*?\./, '');
+const DOMAIN = '{{ domain }}';
 const tbody = document.getElementById('tbody');
 const empty = document.getElementById('empty');
 let allRecords = [];
