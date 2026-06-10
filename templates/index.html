@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DNSlog</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,monospace;background:#0d1117;color:#c9d1d9;font-size:14px}
+.header{background:#161b22;border-bottom:1px solid #30363d;padding:16px 24px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px}
+.header h1{font-size:18px;color:#58a6ff}
+.header h1 span{color:#8b949e;font-size:13px;font-weight:normal;margin-left:8px}
+.toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.toolbar button{padding:8px 14px;border-radius:6px;border:1px solid #30363d;background:#21262d;color:#c9d1d9;font-size:13px;cursor:pointer;transition:background .15s}
+.toolbar button:hover{background:#3d444d}
+.btn-primary{background:#238636;border-color:#238636;color:#fff}
+.btn-primary:hover{background:#2ea043}
+.btn-danger{background:#da3633;border-color:#da3633;color:#fff}
+.btn-danger:hover{background:#f85149}
+.btn-copy{color:#58a6ff}
+.token-bar{padding:12px 24px;background:#161b22;border-bottom:1px solid #30363d;display:flex;align-items:center;gap:12px;font-size:13px}
+.token-bar .hint{color:#484f58;margin-left:auto;font-size:12px}
+.stats{padding:8px 24px;background:#0d1117;display:flex;gap:20px;font-size:12px;color:#484f58;border-bottom:1px solid #21262d}
+.stats span{color:#58a6ff;font-weight:bold}
+.table-wrap{padding:12px 24px;overflow-x:auto;max-height:calc(100vh - 220px);overflow-y:auto}
+table{width:100%;border-collapse:collapse}
+th{text-align:left;padding:8px 12px;background:#161b22;color:#8b949e;font-weight:600;font-size:12px;text-transform:uppercase;border-bottom:1px solid #30363d;position:sticky;top:0;z-index:1}
+td{padding:8px 12px;border-bottom:1px solid #21262d;font-size:13px;word-break:break-all}
+tr:hover td{background:#161b22}
+.domain{color:#79c0ff;cursor:pointer}
+.domain:hover{text-decoration:underline}
+.ip{color:#7ee787}
+.time{color:#8b949e;white-space:nowrap}
+.qtype{color:#d2a8ff}
+.empty{text-align:center;padding:60px 20px;color:#484f58;font-size:15px}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#238636;margin-right:6px;animation:pulse 1.5s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.toast{position:fixed;bottom:20px;right:20px;background:#238636;color:#fff;padding:10px 20px;border-radius:6px;font-size:13px;opacity:0;transition:opacity .3s;z-index:99}
+.toast.show{opacity:1}
+.toast.error{background:#da3633}
+.new-row{animation:highlight 2s ease-out}
+@keyframes highlight{0%{background:#1f3a1f}100%{background:transparent}}
+.auth-overlay{position:fixed;inset:0;background:#0d1117;z-index:100;display:flex;align-items:center;justify-content:center}
+.auth-box{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:40px;width:360px;text-align:center}
+.auth-box h2{color:#58a6ff;margin-bottom:8px;font-size:20px}
+.auth-box p{color:#484f58;font-size:13px;margin-bottom:24px}
+.auth-box input{width:100%;padding:10px 14px;border-radius:6px;border:1px solid #30363d;background:#0d1117;color:#c9d1d9;font-size:14px;outline:none;margin-bottom:16px}
+.auth-box input:focus{border-color:#58a6ff}
+.auth-box .err{color:#da3633;font-size:12px;margin-bottom:12px;min-height:16px}
+.auth-box button{width:100%;padding:10px;border-radius:6px;border:none;background:#238636;color:#fff;font-size:14px;cursor:pointer}
+.auth-box button:hover{background:#2ea043}
+.hidden{display:none!important}
+</style>
+</head>
+<body>
+<div class="auth-overlay" id="authOverlay">
+  <div class="auth-box">
+    <h2>DNSlog</h2>
+    <p>Enter access code to continue</p>
+    <div class="err" id="authErr"></div>
+    <input type="password" id="authInput" placeholder="Access Code" autocomplete="off">
+    <button onclick="doAuth()">Verify</button>
+  </div>
+</div>
+
+<div class="header hidden" id="mainApp">
+  <h1>DNSlog <span id="domainLabel"></span></h1>
+  <div class="toolbar">
+    <button class="btn-primary" onclick="genRandom()">Get Token</button>
+    <button class="btn-copy" onclick="copyAll()">Copy Domain</button>
+    <button class="btn-danger" onclick="clearCurrent()">Clear</button>
+    <button onclick="logout()">Logout</button>
+  </div>
+</div>
+<div class="token-bar hidden" id="tokenBar">
+  <span id="tokenDisplay" style="color:#ffa657;font-family:monospace;font-weight:600;font-size:15px">--</span>
+  <span class="hint" id="tokenHint">Click "Get Token" to generate a unique identifier</span>
+</div>
+<div class="stats hidden" id="statsBar">
+  <div><span class="dot"></span>Connected</div>
+  <div>Records: <span id="total">0</span></div>
+  <div>Unique IPs: <span id="ips">0</span></div>
+  <div>Latest: <span id="latest">--</span></div>
+</div>
+<div class="table-wrap hidden" id="tableWrap">
+  <table>
+    <thead><tr><th>#</th><th>Domain</th><th>Type</th><th>Source IP</th><th>Time</th><th></th></tr></thead>
+    <tbody id="tbody"></tbody>
+  </table>
+  <div class="empty" id="empty" style="display:block">Click "Get Token" to start monitoring</div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const DOMAIN = location.hostname === 'localhost' ? 'log.example.com' : location.hostname.replace(/^.*?\./, '');
+const tbody = document.getElementById('tbody');
+const empty = document.getElementById('empty');
+let allRecords = [];
+let currentToken = '';
+let lastCount = 0;
+let accessCode = '';
+
+function showToast(msg, isError) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (isError ? ' error' : '');
+  setTimeout(() => t.className = 'toast', 2000);
+}
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function headers() {
+  return { 'X-Access-Code': accessCode };
+}
+
+function render(records, animate) {
+  allRecords = records;
+  document.getElementById('total').textContent = records.length;
+  const uniqueIps = new Set(records.map(r => r.src_ip));
+  document.getElementById('ips').textContent = uniqueIps.size;
+  if (records.length > 0) {
+    document.getElementById('latest').textContent = records[0].created_at;
+  }
+  if (!records.length) {
+    tbody.innerHTML = '';
+    empty.style.display = 'block';
+    empty.textContent = currentToken ? 'Waiting for DNS queries...' : 'Click "Get Token" to start monitoring';
+    return;
+  }
+  empty.style.display = 'none';
+  const prevCount = lastCount;
+  lastCount = records.length;
+  tbody.innerHTML = records.map((r, i) => {
+    const isNew = animate && i >= prevCount;
+    const esc = escapeHtml(r.domain).replace(/'/g, "\\'");
+    return `<tr class="${isNew ? 'new-row' : ''}">
+      <td style="color:#484f58">${r.id}</td>
+      <td class="domain" onclick="copyText('${esc}')">${escapeHtml(r.domain)}</td>
+      <td class="qtype">${escapeHtml(r.qtype)}</td>
+      <td class="ip">${escapeHtml(r.src_ip)}</td>
+      <td class="time">${escapeHtml(r.created_at)}</td>
+      <td><button class="btn-copy" style="padding:4px 10px;font-size:12px" onclick="copyText('${esc}')">Copy</button></td>
+    </tr>`;
+  }).join('');
+}
+
+async function fetchRecords(animate) {
+  if (!currentToken) return;
+  try {
+    const res = await fetch('/api/records?token=' + encodeURIComponent(currentToken), { headers: headers() });
+    if (res.status === 401) { logout(); return; }
+    render(await res.json(), animate);
+  } catch (e) { console.error(e); }
+}
+
+async function genRandom() {
+  try {
+    const res = await fetch('/api/random', { headers: headers() });
+    if (res.status === 401) { logout(); return; }
+    const data = await res.json();
+    const domain = data.domain;
+    currentToken = domain.split('.')[0];
+    localStorage.setItem('dnslog_token', currentToken);
+    localStorage.setItem('dnslog_domain', domain);
+    lastCount = 0;
+    document.getElementById('tokenDisplay').textContent = domain;
+    document.getElementById('tokenHint').textContent = 'Monitoring queries for this token';
+    fetchRecords(false);
+    copyText(domain);
+  } catch (e) { console.error(e); }
+}
+
+async function clearCurrent() {
+  if (!currentToken) return;
+  if (!confirm('Clear records for this token?')) return;
+  await fetch('/api/records?token=' + encodeURIComponent(currentToken), { method: 'DELETE', headers: headers() });
+  lastCount = 0;
+  fetchRecords(false);
+  showToast('Cleared');
+}
+
+function copyAll() {
+  if (!currentToken) { showToast('No token yet'); return; }
+  copyText(currentToken + '.' + DOMAIN);
+}
+
+function copyText(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.cssText = 'position:fixed;left:-9999px';
+  document.body.appendChild(ta);
+  ta.select();
+  document.execCommand('copy');
+  document.body.removeChild(ta);
+  showToast('Copied: ' + text);
+}
+
+function showApp() {
+  document.getElementById('authOverlay').classList.add('hidden');
+  document.getElementById('mainApp').classList.remove('hidden');
+  document.getElementById('tokenBar').classList.remove('hidden');
+  document.getElementById('statsBar').classList.remove('hidden');
+  document.getElementById('tableWrap').classList.remove('hidden');
+}
+
+function logout() {
+  localStorage.removeItem('dnslog_code');
+  accessCode = '';
+  location.reload();
+}
+
+async function doAuth() {
+  const input = document.getElementById('authInput');
+  const code = input.value.trim();
+  if (!code) return;
+  try {
+    const res = await fetch('/api/auth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code })
+    });
+    if (res.ok) {
+      accessCode = code;
+      localStorage.setItem('dnslog_code', code);
+      showApp();
+      initApp();
+    } else {
+      document.getElementById('authErr').textContent = 'Wrong access code';
+      input.value = '';
+      input.focus();
+    }
+  } catch (e) { console.error(e); }
+}
+
+// WebSocket
+const WS_URL = 'ws://' + window.location.host.replace(':9090', ':9091');
+
+function connectWS() {
+  const ws = new WebSocket(WS_URL);
+  const dot = document.querySelector('.dot');
+  ws.onopen = () => {
+    dot.style.background = '#238636';
+    ws.send(JSON.stringify({ code: accessCode }));
+  };
+  ws.onclose = () => {
+    dot.style.background = '#da3633';
+    setTimeout(connectWS, 2000);
+  };
+  ws.onmessage = () => { if (currentToken) fetchRecords(true); };
+}
+
+function initApp() {
+  document.getElementById('domainLabel').textContent = DOMAIN;
+  const savedDomain = localStorage.getItem('dnslog_domain');
+  const savedToken = localStorage.getItem('dnslog_token');
+  if (savedToken && savedDomain) {
+    currentToken = savedToken;
+    document.getElementById('tokenDisplay').textContent = savedDomain;
+    document.getElementById('tokenHint').textContent = 'Monitoring queries for this token';
+    fetchRecords(false);
+  }
+  connectWS();
+}
+
+// Auto-login with saved code
+const savedCode = localStorage.getItem('dnslog_code');
+if (savedCode) {
+  accessCode = savedCode;
+  showApp();
+  initApp();
+} else {
+  document.getElementById('authInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') doAuth();
+  });
+  document.getElementById('authInput').focus();
+}
+</script>
+</body>
+</html>

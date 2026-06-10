@@ -1,0 +1,13 @@
+[dnslog]
+domain = log.example.com
+server_ip = 0.0.0.0
+named_log = /var/log/named/query.log
+
+[web]
+port = 9090
+ws_port = 9091
+access_code = changeme
+
+[database]
+path = dnslog.db
+max_records = 5000

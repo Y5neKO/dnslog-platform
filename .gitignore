@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+*.db
+dnslog.conf
+.spec-workflow/
+.idea/
+.vscode/
+*.log
