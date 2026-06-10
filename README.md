@@ -190,14 +190,31 @@ sudo systemctl start dnslog
 
 ## API
 
-All API endpoints (except `/api/auth`) require `X-Access-Code` header.
+Full interactive API documentation: **[http://YOUR_SERVER:9090/api/docs](http://YOUR_SERVER:9090/api/docs)**
+
+All API endpoints (except `/api/auth`) require access code authentication via:
+- Query parameter: `?code=your_access_code`
+- Header: `X-Access-Code: your_access_code`
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `POST` | `/api/auth` | Verify access code. Body: `{"code": "xxx"}` |
-| `GET` | `/api/records?token=xxx` | Get records for a token (max 200) |
-| `DELETE` | `/api/records?token=xxx` | Clear records for a token |
-| `GET` | `/api/random` | Generate a random token domain |
+| `GET` | `/api/random?code=xxx` | Generate a random token domain |
+| `GET` | `/api/records?token=xxx&code=xxx` | Get records for a token (max 200) |
+| `DELETE` | `/api/records?token=xxx&code=xxx` | Clear records for a token |
+| `WS` | `ws://HOST:9091` | WebSocket real-time updates (auth via first message) |
+
+**Quick examples:**
+```bash
+# Generate a token domain
+curl "http://YOUR_SERVER:9090/api/random?code=your_access_code"
+
+# Fetch records
+curl "http://YOUR_SERVER:9090/api/records?token=abc12345&code=your_access_code"
+
+# Clear records
+curl -X DELETE "http://YOUR_SERVER:9090/api/records?token=abc12345&code=your_access_code"
+```
 
 ## Project Structure
 
@@ -208,7 +225,8 @@ dnslog/
 ├── dnslog.conf            # Your config (gitignored)
 ├── requirements.txt       # Python dependencies
 ├── templates/
-│   └── index.html          # Web UI
+│   ├── index.html         # Web UI
+│   └── docs.html          # API documentation
 └── dnslog.db              # SQLite database (auto-created, gitignored)
 ```
 

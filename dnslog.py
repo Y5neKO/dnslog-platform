@@ -48,7 +48,7 @@ ws_loop = None
 def require_access_code(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        code = request.headers.get("X-Access-Code", "").strip()
+        code = request.args.get("code", "").strip() or request.headers.get("X-Access-Code", "").strip()
         if code != ACCESS_CODE:
             return jsonify({"error": "unauthorized"}), 401
         return f(*args, **kwargs)
@@ -194,6 +194,11 @@ def start_websocket():
 def index():
     resp = render_template("index.html", domain=DOMAIN)
     return resp.replace("<head>", "<head><meta http-equiv='Cache-Control' content='no-cache, no-store, must-revalidate'>")
+
+
+@app.route("/api/docs")
+def api_docs():
+    return render_template("docs.html", domain=DOMAIN, web_port=WEB_PORT, ws_port=WS_PORT)
 
 
 @app.route("/api/auth", methods=["POST"])
