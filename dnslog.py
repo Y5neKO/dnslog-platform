@@ -258,7 +258,16 @@ def main():
     tailer.start()
 
     print(f"[WEB] listening on 0.0.0.0:{WEB_PORT}")
-    app.run(host="0.0.0.0", port=WEB_PORT, threaded=True)
+    from gunicorn.app.base import BaseApplication
+    class WSGIApp(BaseApplication):
+        def load_config(self):
+            self.cfg.set("bind", f"0.0.0.0:{WEB_PORT}")
+            self.cfg.set("workers", 1)
+            self.cfg.set("threads", 4)
+            self.cfg.set("accesslog", "-")
+        def load(self):
+            return app
+    WSGIApp().run()
 
 
 if __name__ == "__main__":
