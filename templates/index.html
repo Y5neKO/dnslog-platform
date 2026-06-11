@@ -102,7 +102,7 @@ tr:hover td{background:#161b22}
 <div class="toast" id="toast"></div>
 
 <script>
-const DOMAIN = '{{ domain }}';
+const DOMAIN = {{ domain | tojson }};
 const tbody = document.getElementById('tbody');
 const empty = document.getElementById('empty');
 let allRecords = [];
@@ -147,7 +147,7 @@ function renderPage(records, total, animate) {
   }
   empty.style.display = 'none';
   tbody.innerHTML = records.map(r => {
-    const esc = escapeHtml(r.domain).replace(/'/g, "\\'");
+    const esc = JSON.stringify(r.domain).slice(1, -1);
     return `<tr class="${animate ? 'new-row' : ''}">
       <td style="color:#484f58">${r.id}</td>
       <td class="domain" onclick="copyText('${esc}')">${escapeHtml(r.domain)}</td>
@@ -279,7 +279,7 @@ async function doAuth() {
 }
 
 // WebSocket
-const WS_URL = 'ws://' + window.location.host.replace(':9090', ':9091');
+const WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host.replace(':9090', ':9091');
 
 function connectWS() {
   const ws = new WebSocket(WS_URL);

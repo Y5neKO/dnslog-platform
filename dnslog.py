@@ -12,9 +12,10 @@ import sqlite3
 import subprocess
 import threading
 import time
+from collections import defaultdict, deque
 from functools import wraps
 
-from flask import Flask, jsonify, render_template, request, make_response
+from flask import Flask, jsonify, render_template, request
 import websockets
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -32,8 +33,10 @@ WS_PORT = cfg.getint("web", "ws_port", fallback=9091)
 ACCESS_CODE = cfg.get("web", "access_code", fallback="")
 MAX_RECORDS = cfg.getint("database", "max_records", fallback=5000)
 NAMED_IDLE_TIMEOUT = cfg.getint("dnslog", "named_idle_timeout", fallback=0)
+MAX_WS_CLIENTS = 100
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 1 * 1024 * 1024  # S10: 1MB body limit
 
 db_lock = threading.Lock()
 
@@ -48,6 +51,10 @@ last_token_time = 0
 named_lock = threading.RLock()
 _exit_event = threading.Event()
 
+# S1: auth rate limit
+_auth_attempts = defaultdict(lambda: deque(maxlen=5))
+_auth_lock = threading.Lock()
+
 
 def _check_code(code):
     if not ACCESS_CODE:
@@ -58,7 +65,7 @@ def _check_code(code):
 def require_access_code(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        code = request.args.get("code", "").strip() or request.headers.get("X-Access-Code", "").strip()
+        code = request.headers.get("X-Access-Code", "").strip()
         if not _check_code(code):
             return jsonify({"error": "unauthorized"}), 401
         return f(*args, **kwargs)
@@ -158,7 +165,10 @@ def notify_ws_clients():
         dead = []
         for ws in ws_clients:
             try:
-                fut = asyncio.run_coroutine_threadsafe(ws.send("update"), ws_loop)
+                # S8: add timeout to prevent slow clients blocking event loop
+                fut = asyncio.run_coroutine_threadsafe(
+                    asyncio.wait_for(ws.send("update"), timeout=3), ws_loop
+                )
                 fut.add_done_callback(lambda f: f.exception() if not f.cancelled() else None)
             except Exception:
                 dead.append(ws)
@@ -225,6 +235,11 @@ async def websocket_handler(websocket):
     if not ACCESS_CODE:
         await websocket.close(1008, "no access code configured")
         return
+    # S3: max connection limit
+    with ws_lock:
+        if len(ws_clients) >= MAX_WS_CLIENTS:
+            await websocket.close(1013, "too many connections")
+            return
     try:
         msg = await asyncio.wait_for(websocket.recv(), timeout=5)
         data = json.loads(msg)
@@ -250,7 +265,12 @@ def start_websocket():
     asyncio.set_event_loop(loop)
 
     async def serve():
-        async with websockets.serve(websocket_handler, "0.0.0.0", WS_PORT):
+        # S3/S12: ping keepalive to detect zombie connections
+        async with websockets.serve(
+            websocket_handler, "0.0.0.0", WS_PORT,
+            ping_interval=20, ping_timeout=10,
+            max_size=4096, close_timeout=5,
+        ):
             print(f"[WS] listening on 0.0.0.0:{WS_PORT}")
             await asyncio.Future()
 
@@ -258,9 +278,14 @@ def start_websocket():
 
 
 @app.after_request
-def add_no_cache(resp):
+def add_security_headers(resp):
     if request.path in ("/", "/api/docs"):
         resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        # S2: security headers
+        resp.headers["X-Frame-Options"] = "DENY"
+        resp.headers["X-Content-Type-Options"] = "nosniff"
+        resp.headers["Referrer-Policy"] = "no-referrer"
+        resp.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"
     return resp
 
 
@@ -276,6 +301,14 @@ def api_docs():
 
 @app.route("/api/auth", methods=["POST"])
 def api_auth():
+    # S1: rate limit by IP
+    ip = request.remote_addr
+    with _auth_lock:
+        now = time.time()
+        attempts = _auth_attempts[ip]
+        if len(attempts) >= 5 and now - attempts[0] < 60:
+            return jsonify({"error": "rate limited"}), 429
+        attempts.append(now)
     data = request.get_json(silent=True) or {}
     if _check_code(data.get("code", "").strip()):
         return jsonify({"ok": True})
@@ -325,8 +358,9 @@ def api_records():
     token = request.args.get("token", "").strip()
     if not token:
         return jsonify({"records": [], "total": 0})
-    page = request.args.get("page", 1, type=int)
-    limit = request.args.get("limit", 20, type=int)
+    # S4: clamp page and limit
+    page = max(1, request.args.get("page", 1, type=int))
+    limit = max(1, min(200, request.args.get("limit", 20, type=int)))
     offset = (page - 1) * limit
     safe = token.replace("%", r"\%").replace("_", r"\_")
     conn = get_db()
