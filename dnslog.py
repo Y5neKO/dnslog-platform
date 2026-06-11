@@ -6,10 +6,9 @@ import configparser
 import hmac
 import json
 import os
-import random
 import re
+import secrets
 import sqlite3
-import string
 import subprocess
 import threading
 import time
@@ -42,11 +41,12 @@ LOG_PATTERN = re.compile(
     r'(\d{2}-\w{3}-\d{4}\s+\d+:\d+:\d+\.\d+)\s+\w+:\s+client @0x[0-9a-f]+\s+([\d.]+)#\d+\s+\(([^)]+)\):\s+query:\s+(\S+)\s+IN\s+(\w+)'
 )
 
-ws_clients = []
+ws_clients = set()
 ws_lock = threading.Lock()
 ws_loop = None
 last_token_time = 0
 named_lock = threading.RLock()
+_exit_event = threading.Event()
 
 
 def _check_code(code):
@@ -97,7 +97,8 @@ def named_watchdog():
     if NAMED_IDLE_TIMEOUT <= 0:
         return
     while True:
-        time.sleep(30)
+        if _exit_event.wait(30):
+            return
         with named_lock:
             if last_token_time > 0 and time.time() - last_token_time > NAMED_IDLE_TIMEOUT:
                 try:
@@ -162,7 +163,7 @@ def notify_ws_clients():
             except Exception:
                 dead.append(ws)
         for ws in dead:
-            ws_clients.remove(ws)
+            ws_clients.discard(ws)
 
 
 def insert_record(domain, qtype_name, src_ip):
@@ -234,13 +235,12 @@ async def websocket_handler(websocket):
         await websocket.close(1008, "unauthorized")
         return
     with ws_lock:
-        ws_clients.append(websocket)
+        ws_clients.add(websocket)
     try:
         await websocket.wait_closed()
     finally:
         with ws_lock:
-            if websocket in ws_clients:
-                ws_clients.remove(websocket)
+            ws_clients.discard(websocket)
 
 
 def start_websocket():
@@ -349,7 +349,8 @@ def api_clear():
     with db_lock:
         conn = get_db()
         if token:
-            conn.execute("DELETE FROM records WHERE domain LIKE ?", (f"%.{token}.%",))
+            safe = token.replace("%", r"\%").replace("_", r"\_")
+            conn.execute("DELETE FROM records WHERE domain LIKE ? ESCAPE '\\'", (f"%.{safe}.%",))
         else:
             conn.execute("DELETE FROM records")
         conn.commit()
@@ -364,12 +365,14 @@ def api_random():
     global last_token_time
     named_ensure_running()
     last_token_time = time.time()
-    s = "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
+    s = secrets.token_urlsafe(6)[:8]
     return jsonify({"domain": f"{s}.{DOMAIN}"})
 
 
 def main():
     init_db()
+    if not os.path.isfile(NAMED_LOG):
+        print(f"[CONF] WARNING: named_log not found: {NAMED_LOG}")
     print(f"[CONF] domain={DOMAIN} max_records={MAX_RECORDS}")
 
     ws_thread = threading.Thread(target=start_websocket, daemon=True)
