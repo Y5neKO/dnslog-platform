@@ -147,7 +147,7 @@ function renderPage(records, total, animate) {
   }
   empty.style.display = 'none';
   tbody.innerHTML = records.map(r => {
-    const esc = JSON.stringify(r.domain).slice(1, -1);
+    const esc = JSON.stringify(r.domain).slice(1, -1).replace(/'/g, "&#39;").replace(/&/g, "&amp;");
     return `<tr class="${animate ? 'new-row' : ''}">
       <td style="color:#484f58">${r.id}</td>
       <td class="domain" onclick="copyText('${esc}')">${escapeHtml(r.domain)}</td>

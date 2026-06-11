@@ -45,6 +45,7 @@ LOG_PATTERN = re.compile(
 )
 
 ws_clients = set()
+_all_ws = set()
 ws_lock = threading.Lock()
 ws_loop = None
 last_token_time = 0
@@ -124,18 +125,21 @@ def get_db():
 
 def init_db():
     conn = get_db()
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS records (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            domain TEXT NOT NULL,
-            qtype TEXT NOT NULL,
-            src_ip TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    conn.execute("UPDATE records SET domain=LOWER(domain) WHERE domain != LOWER(domain)")
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                domain TEXT NOT NULL,
+                qtype TEXT NOT NULL,
+                src_ip TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute("UPDATE records SET domain=LOWER(domain) WHERE domain != LOWER(domain)")
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def trim_records():
@@ -178,24 +182,24 @@ def notify_ws_clients():
 
 def insert_record(domain, qtype_name, src_ip):
     with db_lock:
+        conn = get_db()
         try:
-            conn = get_db()
             domain_lower = domain.lower()
             last = conn.execute(
                 "SELECT id FROM records WHERE domain=? AND src_ip=? ORDER BY id DESC LIMIT 1",
                 (domain_lower, src_ip)
             ).fetchone()
             if last:
-                conn.close()
                 return
             conn.execute(
                 "INSERT INTO records (domain, qtype, src_ip) VALUES (?, ?, ?)",
                 (domain_lower, qtype_name, src_ip),
             )
             conn.commit()
-            conn.close()
         except Exception as e:
             print(f"[DB ERROR] {e}")
+        finally:
+            conn.close()
     trim_records()
     notify_ws_clients()
 
@@ -235,11 +239,11 @@ async def websocket_handler(websocket):
     if not ACCESS_CODE:
         await websocket.close(1008, "no access code configured")
         return
-    # S3: max connection limit
     with ws_lock:
-        if len(ws_clients) >= MAX_WS_CLIENTS:
+        if len(_all_ws) >= MAX_WS_CLIENTS:
             await websocket.close(1013, "too many connections")
             return
+        _all_ws.add(websocket)
     try:
         msg = await asyncio.wait_for(websocket.recv(), timeout=5)
         data = json.loads(msg)
@@ -250,12 +254,14 @@ async def websocket_handler(websocket):
         await websocket.close(1008, "unauthorized")
         return
     with ws_lock:
+        _all_ws.discard(websocket)
         ws_clients.add(websocket)
     try:
         await websocket.wait_closed()
     finally:
         with ws_lock:
             ws_clients.discard(websocket)
+            _all_ws.discard(websocket)
 
 
 def start_websocket():
@@ -279,12 +285,11 @@ def start_websocket():
 
 @app.after_request
 def add_security_headers(resp):
+    resp.headers["Cache-Control"] = "no-store"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    resp.headers["X-Frame-Options"] = "DENY"
     if request.path in ("/", "/api/docs"):
-        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-        # S2: security headers
-        resp.headers["X-Frame-Options"] = "DENY"
-        resp.headers["X-Content-Type-Options"] = "nosniff"
-        resp.headers["Referrer-Policy"] = "no-referrer"
         resp.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src ws: wss: 'self'"
     return resp
 
@@ -362,7 +367,7 @@ def api_records():
     page = max(1, request.args.get("page", 1, type=int))
     limit = max(1, min(200, request.args.get("limit", 20, type=int)))
     offset = (page - 1) * limit
-    safe = token.replace("%", r"\%").replace("_", r"\_")
+    safe = token.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
     conn = get_db()
     total = conn.execute(
         "SELECT COUNT(*) FROM records WHERE domain LIKE ? ESCAPE '\\'",
@@ -380,13 +385,12 @@ def api_records():
 @require_access_code
 def api_clear():
     token = request.args.get("token", "").strip()
+    if not token:
+        return jsonify({"error": "token required"}), 400
     with db_lock:
         conn = get_db()
-        if token:
-            safe = token.replace("%", r"\%").replace("_", r"\_")
-            conn.execute("DELETE FROM records WHERE domain LIKE ? ESCAPE '\\'", (f"%.{safe}.%",))
-        else:
-            conn.execute("DELETE FROM records")
+        safe = token.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
+        conn.execute("DELETE FROM records WHERE domain LIKE ? ESCAPE '\\'", (f"%.{safe}.%",))
         conn.commit()
         conn.close()
     notify_ws_clients()
@@ -416,6 +420,15 @@ def main():
     tailer.start()
 
     if NAMED_IDLE_TIMEOUT > 0:
+        global last_token_time
+        try:
+            r = subprocess.run(["sudo", "systemctl", "is-active", "named"],
+                               capture_output=True, text=True)
+            if r.stdout.strip() == "active":
+                last_token_time = time.time()
+                print("[NAMED] BIND already running, started countdown")
+        except Exception:
+            pass
         wd = threading.Thread(target=named_watchdog, daemon=True)
         wd.start()
         print(f"[NAMED] watchdog active, idle timeout {NAMED_IDLE_TIMEOUT}s")
