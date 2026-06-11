@@ -80,7 +80,7 @@ tr:hover td{background:#161b22}
 </div>
 <div class="stats hidden" id="statsBar">
   <div><span class="dot" id="wsDot"></span>WS</div>
-  <div><span class="dot" id="dnsDot"></span>DNS <span id="dnsLabel" style="color:#8b949e">--</span></div>
+  <div style="display:flex;align-items:center;gap:8px"><span class="dot" id="dnsDot"></span>DNS <span id="dnsLabel" style="color:#8b949e">--</span> <button id="dnsToggle" onclick="toggleDns()" style="padding:2px 8px;border-radius:4px;border:1px solid #30363d;background:#21262d;color:#c9d1d9;font-size:11px;cursor:pointer;display:none">Start</button></div>
   <div>Records: <span id="total">0</span></div>
   <div>Unique IPs: <span id="ips">0</span></div>
   <div>Latest: <span id="latest">--</span></div>
@@ -264,22 +264,50 @@ async function pollDnsStatus() {
     const data = await res.json();
     const dot = document.getElementById('dnsDot');
     const label = document.getElementById('dnsLabel');
-    if (data.named) {
-      dot.className = 'dot';
-      if (data.timeout > 0 && data.remaining > 0) {
-        const m = Math.floor(data.remaining / 60);
-        const s = data.remaining % 60;
-        label.textContent = `${m}:${String(s).padStart(2, '0')}`;
-        label.style.color = data.remaining < 60 ? '#d29922' : '#3fb950';
-        if (data.remaining < 60) dot.className = 'dot dot-warn';
+    const btn = document.getElementById('dnsToggle');
+    if (data.timeout > 0) {
+      btn.style.display = 'inline-block';
+      if (data.named) {
+        dot.className = 'dot';
+        if (data.remaining > 0) {
+          const m = Math.floor(data.remaining / 60);
+          const s = data.remaining % 60;
+          label.textContent = `${m}:${String(s).padStart(2, '0')}`;
+          label.style.color = data.remaining < 60 ? '#d29922' : '#3fb950';
+          if (data.remaining < 60) dot.className = 'dot dot-warn';
+        } else {
+          label.textContent = 'Active';
+          label.style.color = '#3fb950';
+        }
+        btn.textContent = 'Stop';
+        btn.style.borderColor = '#da3633';
+        btn.style.color = '#f85149';
       } else {
-        label.textContent = 'Active';
-        label.style.color = '#3fb950';
+        dot.className = 'dot dot-off';
+        label.textContent = 'Stopped';
+        label.style.color = '#f85149';
+        btn.textContent = 'Start';
+        btn.style.borderColor = '#238636';
+        btn.style.color = '#3fb950';
       }
     } else {
-      dot.className = 'dot dot-off';
-      label.textContent = 'Stopped';
-      label.style.color = '#f85149';
+      btn.style.display = 'none';
+      dot.className = data.named ? 'dot' : 'dot dot-off';
+      label.textContent = data.named ? 'Active' : 'Stopped';
+      label.style.color = data.named ? '#3fb950' : '#f85149';
+    }
+  } catch (e) {}
+}
+
+async function toggleDns() {
+  const btn = document.getElementById('dnsToggle');
+  const action = btn.textContent.trim().toLowerCase();
+  try {
+    const res = await fetch('/api/named/' + action, { method: 'POST', headers: headers() });
+    if (res.status === 401) { logout(); return; }
+    if (res.ok) {
+      showToast(action === 'start' ? 'DNS started' : 'DNS stopped');
+      pollDnsStatus();
     }
   } catch (e) {}
 }

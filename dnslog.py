@@ -278,6 +278,23 @@ def api_status():
     })
 
 
+@app.route("/api/named/<action>", methods=["POST"])
+@require_access_code
+def api_named_control(action):
+    if NAMED_IDLE_TIMEOUT <= 0:
+        return jsonify({"error": "named auto-control disabled"}), 400
+    global last_token_time
+    if action == "start":
+        named_ensure_running()
+        last_token_time = time.time()
+        return jsonify({"ok": True})
+    elif action == "stop":
+        named_stop()
+        last_token_time = 0
+        return jsonify({"ok": True})
+    return jsonify({"error": "invalid action"}), 400
+
+
 @app.route("/api/records")
 @require_access_code
 def api_records():
