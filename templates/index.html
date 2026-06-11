@@ -356,8 +356,10 @@ function initApp() {
   const savedToken = localStorage.getItem('dnslog_token');
   if (savedToken && savedDomain) {
     currentToken = savedToken;
+    currentPage = 1;
     document.getElementById('tokenDisplay').textContent = savedDomain;
     document.getElementById('tokenHint').textContent = 'Monitoring queries for this token';
+    empty.textContent = 'Loading...';
     fetchRecords(false);
   }
   connectWS();
