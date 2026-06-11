@@ -250,6 +250,34 @@ def api_auth():
     return jsonify({"error": "wrong code"}), 403
 
 
+@app.route("/api/status")
+@require_access_code
+def api_status():
+    named_active = False
+    remaining = 0
+    if NAMED_IDLE_TIMEOUT > 0:
+        try:
+            r = subprocess.run(["sudo", "systemctl", "is-active", "named"],
+                               capture_output=True, text=True)
+            named_active = r.stdout.strip() == "active"
+        except Exception:
+            pass
+        if named_active and last_token_time > 0:
+            remaining = max(0, int(NAMED_IDLE_TIMEOUT - (time.time() - last_token_time)))
+    else:
+        try:
+            r = subprocess.run(["sudo", "systemctl", "is-active", "named"],
+                               capture_output=True, text=True)
+            named_active = r.stdout.strip() == "active"
+        except Exception:
+            pass
+    return jsonify({
+        "named": named_active,
+        "remaining": remaining,
+        "timeout": NAMED_IDLE_TIMEOUT
+    })
+
+
 @app.route("/api/records")
 @require_access_code
 def api_records():

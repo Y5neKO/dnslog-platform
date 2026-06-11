@@ -34,6 +34,8 @@ tr:hover td{background:#161b22}
 .qtype{color:#d2a8ff}
 .empty{text-align:center;padding:60px 20px;color:#484f58;font-size:15px}
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#238636;margin-right:6px;animation:pulse 1.5s infinite}
+.dot-off{background:#da3633;animation:none}
+.dot-warn{background:#d29922;animation:pulse 1s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 .toast{position:fixed;bottom:20px;right:20px;background:#238636;color:#fff;padding:10px 20px;border-radius:6px;font-size:13px;opacity:0;transition:opacity .3s;z-index:99}
 .toast.show{opacity:1}
@@ -77,7 +79,8 @@ tr:hover td{background:#161b22}
   <span class="hint" id="tokenHint">Click "Get Token" to generate a unique identifier</span>
 </div>
 <div class="stats hidden" id="statsBar">
-  <div><span class="dot"></span>Connected</div>
+  <div><span class="dot" id="wsDot"></span>WS</div>
+  <div><span class="dot" id="dnsDot"></span>DNS <span id="dnsLabel" style="color:#8b949e">--</span></div>
   <div>Records: <span id="total">0</span></div>
   <div>Unique IPs: <span id="ips">0</span></div>
   <div>Latest: <span id="latest">--</span></div>
@@ -170,6 +173,7 @@ async function genRandom() {
     document.getElementById('tokenDisplay').textContent = domain;
     document.getElementById('tokenHint').textContent = 'Monitoring queries for this token';
     fetchRecords(false);
+    pollDnsStatus();
     copyText(domain);
   } catch (e) { console.error(e); }
 }
@@ -241,16 +245,43 @@ const WS_URL = 'ws://' + window.location.host.replace(':9090', ':9091');
 
 function connectWS() {
   const ws = new WebSocket(WS_URL);
-  const dot = document.querySelector('.dot');
+  const dot = document.getElementById('wsDot');
   ws.onopen = () => {
-    dot.style.background = '#238636';
+    dot.className = 'dot';
     ws.send(JSON.stringify({ code: accessCode }));
   };
   ws.onclose = () => {
-    dot.style.background = '#da3633';
+    dot.className = 'dot dot-off';
     setTimeout(connectWS, 2000);
   };
   ws.onmessage = () => { if (currentToken) fetchRecords(true); };
+}
+
+async function pollDnsStatus() {
+  try {
+    const res = await fetch('/api/status', { headers: headers() });
+    if (res.status === 401) { logout(); return; }
+    const data = await res.json();
+    const dot = document.getElementById('dnsDot');
+    const label = document.getElementById('dnsLabel');
+    if (data.named) {
+      dot.className = 'dot';
+      if (data.timeout > 0 && data.remaining > 0) {
+        const m = Math.floor(data.remaining / 60);
+        const s = data.remaining % 60;
+        label.textContent = `${m}:${String(s).padStart(2, '0')}`;
+        label.style.color = data.remaining < 60 ? '#d29922' : '#3fb950';
+        if (data.remaining < 60) dot.className = 'dot dot-warn';
+      } else {
+        label.textContent = 'Active';
+        label.style.color = '#3fb950';
+      }
+    } else {
+      dot.className = 'dot dot-off';
+      label.textContent = 'Stopped';
+      label.style.color = '#f85149';
+    }
+  } catch (e) {}
 }
 
 function initApp() {
@@ -264,6 +295,8 @@ function initApp() {
     fetchRecords(false);
   }
   connectWS();
+  pollDnsStatus();
+  setInterval(pollDnsStatus, 5000);
 }
 
 // Auto-login with saved code
