@@ -210,40 +210,42 @@ sudo systemctl start dnslog
 
 Full interactive API documentation: **[http://YOUR_SERVER:9090/api/docs](http://YOUR_SERVER:9090/api/docs)**
 
-All API endpoints (except `/api/auth`) require access code authentication via:
-- Query parameter: `?code=your_access_code`
+All API endpoints (except `/api/auth`) require access code via header:
 - Header: `X-Access-Code: your_access_code`
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `POST` | `/api/auth` | Verify access code. Body: `{"code": "xxx"}` |
-| `GET` | `/api/status?code=xxx` | Get BIND status, remaining time, timeout config |
-| `POST` | `/api/named/start?code=xxx` | Manually start BIND |
-| `POST` | `/api/named/stop?code=xxx` | Manually stop BIND |
-| `GET` | `/api/random?code=xxx` | Generate a random token domain |
-| `GET` | `/api/records?token=xxx&code=xxx` | Get records for a token (max 200) |
-| `DELETE` | `/api/records?token=xxx&code=xxx` | Clear records for a token |
+| `GET` | `/api/status` | Get BIND status, remaining time, timeout config |
+| `POST` | `/api/named/start` | Manually start BIND |
+| `POST` | `/api/named/stop` | Manually stop BIND |
+| `GET` | `/api/random` | Generate a random token domain |
+| `GET` | `/api/records?token=xxx` | Get records for a token (paginated, 20/page) |
+| `DELETE` | `/api/records?token=xxx` | Clear records for a token |
 | `WS` | `ws://HOST:9091` | WebSocket real-time updates (auth via first message) |
 
 **Quick examples:**
 ```bash
 # Generate a token domain (also starts BIND)
-curl "http://YOUR_SERVER:9090/api/random?code=your_access_code"
+curl -H "X-Access-Code: your_access_code" "http://YOUR_SERVER:9090/api/random"
 
 # Fetch records
-curl "http://YOUR_SERVER:9090/api/records?token=abc12345&code=your_access_code"
+curl -H "X-Access-Code: your_access_code" "http://YOUR_SERVER:9090/api/records?token=abc12345"
+
+# Fetch records (page 2)
+curl -H "X-Access-Code: your_access_code" "http://YOUR_SERVER:9090/api/records?token=abc12345&page=2"
 
 # Check DNS status
-curl "http://YOUR_SERVER:9090/api/status?code=your_access_code"
+curl -H "X-Access-Code: your_access_code" "http://YOUR_SERVER:9090/api/status"
 
 # Manually start BIND
-curl -X POST "http://YOUR_SERVER:9090/api/named/start?code=your_access_code"
+curl -X POST -H "X-Access-Code: your_access_code" "http://YOUR_SERVER:9090/api/named/start"
 
 # Manually stop BIND
-curl -X POST "http://YOUR_SERVER:9090/api/named/stop?code=your_access_code"
+curl -X POST -H "X-Access-Code: your_access_code" "http://YOUR_SERVER:9090/api/named/stop"
 
 # Clear records
-curl -X DELETE "http://YOUR_SERVER:9090/api/records?token=abc12345&code=your_access_code"
+curl -X DELETE -H "X-Access-Code: your_access_code" "http://YOUR_SERVER:9090/api/records?token=abc12345"
 ```
 
 ## Project Structure

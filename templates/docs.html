@@ -27,8 +27,6 @@ pre{background:#0d1117;border:1px solid #21262d;border-radius:6px;padding:12px;o
 pre .comment{color:#484f58}
 pre .string{color:#a5d6ff}
 pre .keyword{color:#ff7b72}
-.tag{display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;background:#23863622;color:#3fb950;margin-right:6px}
-.tag.optional{background:#30363d;color:#8b949e}
 .params{width:100%;border-collapse:collapse;font-size:13px;margin-top:4px}
 .params th{text-align:left;padding:6px 8px;color:#8b949e;font-weight:600;font-size:12px;border-bottom:1px solid #30363d}
 .params td{padding:6px 8px;border-bottom:1px solid #21262d}
@@ -50,7 +48,7 @@ pre .keyword{color:#ff7b72}
 <p class="subtitle">{{ domain }}</p>
 
 <div class="note">
-<strong>Authentication:</strong> All protected endpoints accept access code via query parameter <code>?code=xxx</code> or header <code>X-Access-Code: xxx</code>.
+<strong>Authentication:</strong> All protected endpoints require access code via header: <code>X-Access-Code: xxx</code>.
 </div>
 
 <div class="endpoint">
@@ -74,6 +72,10 @@ pre .keyword{color:#ff7b72}
 <h3>Response 403</h3>
 <pre class="response error">{ "error": "wrong code" }</pre>
 </div>
+<div class="section">
+<h3>Response 429</h3>
+<pre class="response error">{ "error": "rate limited" }</pre>
+</div>
 </div>
 </div>
 
@@ -85,10 +87,10 @@ pre .keyword{color:#ff7b72}
 </div>
 <div class="body">
 <div class="section">
-<h3>Parameters</h3>
+<h3>Headers</h3>
 <table class="params">
-<tr><th>Param</th><th>In</th><th>Required</th><th>Description</th></tr>
-<tr><td><code>code</code></td><td>query / header</td><td>Yes</td><td>Access code</td></tr>
+<tr><th>Header</th><th>Required</th><th>Description</th></tr>
+<tr><td><code>X-Access-Code</code></td><td>Yes</td><td>Access code</td></tr>
 </table>
 </div>
 <div class="section">
@@ -97,7 +99,7 @@ pre .keyword{color:#ff7b72}
 </div>
 <div class="section">
 <h3>Example</h3>
-<pre>curl "http://HOST:{{ web_port }}/api/random?code=your_access_code"</pre>
+<pre>curl -H "X-Access-Code: your_access_code" "http://HOST:{{ web_port }}/api/random"</pre>
 </div>
 </div>
 </div>
@@ -110,13 +112,19 @@ pre .keyword{color:#ff7b72}
 </div>
 <div class="body">
 <div class="section">
+<h3>Headers</h3>
+<table class="params">
+<tr><th>Header</th><th>Required</th><th>Description</th></tr>
+<tr><td><code>X-Access-Code</code></td><td>Yes</td><td>Access code</td></tr>
+</table>
+</div>
+<div class="section">
 <h3>Parameters</h3>
 <table class="params">
 <tr><th>Param</th><th>In</th><th>Required</th><th>Description</th></tr>
-<tr><td><code>code</code></td><td>query / header</td><td>Yes</td><td>Access code</td></tr>
 <tr><td><code>token</code></td><td>query</td><td>Yes</td><td>Token string (first part of domain)</td></tr>
 <tr><td><code>page</code></td><td>query</td><td>No</td><td>Page number (default: 1)</td></tr>
-<tr><td><code>limit</code></td><td>query</td><td>No</td><td>Records per page (default: 20)</td></tr>
+<tr><td><code>limit</code></td><td>query</td><td>No</td><td>Records per page (default: 20, max: 200)</td></tr>
 </table>
 </div>
 <div class="section">
@@ -136,8 +144,8 @@ pre .keyword{color:#ff7b72}
 </div>
 <div class="section">
 <h3>Example</h3>
-<pre>curl "http://HOST:{{ web_port }}/api/records?token=abc12345&code=your_access_code"
-curl "http://HOST:{{ web_port }}/api/records?token=abc12345&page=2&limit=20&code=your_access_code"</pre>
+<pre>curl -H "X-Access-Code: your_access_code" "http://HOST:{{ web_port }}/api/records?token=abc12345"
+curl -H "X-Access-Code: your_access_code" "http://HOST:{{ web_port }}/api/records?token=abc12345&page=2"</pre>
 </div>
 </div>
 </div>
@@ -150,10 +158,16 @@ curl "http://HOST:{{ web_port }}/api/records?token=abc12345&page=2&limit=20&code
 </div>
 <div class="body">
 <div class="section">
+<h3>Headers</h3>
+<table class="params">
+<tr><th>Header</th><th>Required</th><th>Description</th></tr>
+<tr><td><code>X-Access-Code</code></td><td>Yes</td><td>Access code</td></tr>
+</table>
+</div>
+<div class="section">
 <h3>Parameters</h3>
 <table class="params">
 <tr><th>Param</th><th>In</th><th>Required</th><th>Description</th></tr>
-<tr><td><code>code</code></td><td>query / header</td><td>Yes</td><td>Access code</td></tr>
 <tr><td><code>token</code></td><td>query</td><td>Yes</td><td>Token to clear</td></tr>
 </table>
 </div>
@@ -163,7 +177,86 @@ curl "http://HOST:{{ web_port }}/api/records?token=abc12345&page=2&limit=20&code
 </div>
 <div class="section">
 <h3>Example</h3>
-<pre>curl -X DELETE "http://HOST:{{ web_port }}/api/records?token=abc12345&code=your_access_code"</pre>
+<pre>curl -X DELETE -H "X-Access-Code: your_access_code" "http://HOST:{{ web_port }}/api/records?token=abc12345"</pre>
+</div>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="header" onclick="toggle(this)">
+<span class="method get">GET</span>
+<span class="path">/api/status</span>
+<span class="desc">Get BIND DNS status</span>
+</div>
+<div class="body">
+<div class="section">
+<h3>Headers</h3>
+<table class="params">
+<tr><th>Header</th><th>Required</th><th>Description</th></tr>
+<tr><td><code>X-Access-Code</code></td><td>Yes</td><td>Access code</td></tr>
+</table>
+</div>
+<div class="section">
+<h3>Response 200</h3>
+<pre class="response">{
+  "named": true,
+  "remaining": 542,
+  "timeout": 600
+}</pre>
+</div>
+<div class="section">
+<h3>Example</h3>
+<pre>curl -H "X-Access-Code: your_access_code" "http://HOST:{{ web_port }}/api/status"</pre>
+</div>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="header" onclick="toggle(this)">
+<span class="method post">POST</span>
+<span class="path">/api/named/start</span>
+<span class="desc">Manually start BIND</span>
+</div>
+<div class="body">
+<div class="section">
+<h3>Headers</h3>
+<table class="params">
+<tr><th>Header</th><th>Required</th><th>Description</th></tr>
+<tr><td><code>X-Access-Code</code></td><td>Yes</td><td>Access code</td></tr>
+</table>
+</div>
+<div class="section">
+<h3>Response 200</h3>
+<pre class="response">{ "ok": true }</pre>
+</div>
+<div class="section">
+<h3>Example</h3>
+<pre>curl -X POST -H "X-Access-Code: your_access_code" "http://HOST:{{ web_port }}/api/named/start"</pre>
+</div>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="header" onclick="toggle(this)">
+<span class="method post">POST</span>
+<span class="path">/api/named/stop</span>
+<span class="desc">Manually stop BIND</span>
+</div>
+<div class="body">
+<div class="section">
+<h3>Headers</h3>
+<table class="params">
+<tr><th>Header</th><th>Required</th><th>Description</th></tr>
+<tr><td><code>X-Access-Code</code></td><td>Yes</td><td>Access code</td></tr>
+</table>
+</div>
+<div class="section">
+<h3>Response 200</h3>
+<pre class="response">{ "ok": true }</pre>
+</div>
+<div class="section">
+<h3>Example</h3>
+<pre>curl -X POST -H "X-Access-Code: your_access_code" "http://HOST:{{ web_port }}/api/named/stop"</pre>
 </div>
 </div>
 </div>
@@ -177,8 +270,10 @@ curl "http://HOST:{{ web_port }}/api/records?token=abc12345&page=2&limit=20&code
 <div class="body">
 <div class="section">
 <h3>Connection</h3>
-<pre><span class="comment">// 1. Connect</span>
-const ws = new WebSocket("ws://HOST:{{ ws_port }}");
+<pre><span class="comment">// 1. Connect (auto-select wss:// if behind HTTPS)
+const ws = new WebSocket(
+  (location.protocol === 'https:' ? 'wss:' : 'ws:') + 'HOST:{{ ws_port }}'
+);
 
 <span class="comment">// 2. Send auth within 5 seconds</span>
 ws.send(JSON.stringify({ "code": "your_access_code" }));
@@ -186,13 +281,16 @@ ws.send(JSON.stringify({ "code": "your_access_code" }));
 <span class="comment">// 3. Receive updates</span>
 ws.onmessage = () => {
   <span class="comment">// Fetch latest records via GET /api/records</span>
-};</pre>
+};
+</pre>
 </div>
 <div class="section">
 <h3>Notes</h3>
 <ul style="padding-left:20px;color:#8b949e">
 <li>Must send auth message within 5s of connection, or socket is closed</li>
 <li>Server sends "update" string on new record; client should fetch /api/records</li>
+<li>Max 100 concurrent WebSocket connections</li>
+<li>Ping/pong keepalive every 20s to detect zombie connections</li>
 <li>Auto-reconnect recommended on close</li>
 </ul>
 </div>
