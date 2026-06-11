@@ -103,9 +103,9 @@ tr:hover td{background:#161b22}
 
 <script>
 const DOMAIN = {{ domain | tojson }};
+const WS_PORT = {{ ws_port | tojson }};
 const tbody = document.getElementById('tbody');
 const empty = document.getElementById('empty');
-let allRecords = [];
 let currentToken = '';
 let lastCount = 0;
 let accessCode = '';
@@ -133,8 +133,7 @@ function headers() {
 function renderPage(records, total, animate) {
   totalRecords = total;
   document.getElementById('total').textContent = total;
-  const uniqueIps = new Set(allRecords.map(r => r.src_ip));
-  document.getElementById('ips').textContent = uniqueIps.size;
+  document.getElementById('ips').textContent = new Set(records.map(r => r.src_ip)).size;
   if (total > 0) {
     document.getElementById('latest').textContent = records[0].created_at;
   }
@@ -190,8 +189,6 @@ async function fetchRecords(animate) {
     const res = await fetch(`/api/records?token=${encodeURIComponent(currentToken)}&page=${currentPage}&limit=${pageSize}`, { headers: headers() });
     if (res.status === 401) { logout(); return; }
     const data = await res.json();
-    if (!allRecords.length || animate) allRecords = data.records;
-    else allRecords = data.records;
     renderPage(data.records, data.total, animate);
   } catch (e) { console.error(e); }
 }
@@ -279,7 +276,7 @@ async function doAuth() {
 }
 
 // WebSocket
-const WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host.replace(':9090', ':9091');
+const WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.hostname + ':' + WS_PORT;
 
 function connectWS() {
   const ws = new WebSocket(WS_URL);

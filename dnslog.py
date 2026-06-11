@@ -3,6 +3,7 @@
 
 import asyncio
 import configparser
+import signal
 import hmac
 import json
 import os
@@ -26,7 +27,7 @@ cfg.read(CONF_PATH)
 
 DB_PATH = os.path.join(APP_DIR, cfg.get("database", "path", fallback="dnslog.db"))
 NAMED_LOG = cfg.get("dnslog", "named_log", fallback="/var/log/named/query.log")
-DOMAIN = cfg.get("dnslog", "domain", fallback="log.example.com")
+DOMAIN = cfg.get("dnslog", "domain", fallback="log.example.com").strip(".")
 SERVER_IP = cfg.get("dnslog", "server_ip", fallback="127.0.0.1")
 WEB_PORT = cfg.getint("web", "port", fallback=9090)
 WS_PORT = cfg.getint("web", "ws_port", fallback=9091)
@@ -41,7 +42,7 @@ app.config["MAX_CONTENT_LENGTH"] = 1 * 1024 * 1024  # S10: 1MB body limit
 db_lock = threading.Lock()
 
 LOG_PATTERN = re.compile(
-    r'(\d{2}-\w{3}-\d{4}\s+\d+:\d+:\d+\.\d+)\s+\w+:\s+client @0x[0-9a-f]+\s+([\d.]+)#\d+\s+\(([^)]+)\):\s+query:\s+(\S+)\s+IN\s+(\w+)'
+    r'(\d{2}-\w{3}-\d{4}\s+\d+:\d+:\d+\.\d+)\s+\w+:\s+client @0x[0-9a-f]+\s+([\d.:a-fA-F]+)#\d+\s+\(([^)]+)\):\s+query:\s+(\S+)\s+IN\s+(\w+)'
 )
 
 ws_clients = set()
@@ -147,19 +148,23 @@ def trim_records():
         return
     with db_lock:
         conn = get_db()
-        count = conn.execute("SELECT COUNT(*) FROM records").fetchone()[0]
-        if count > MAX_RECORDS:
-            cutoff = conn.execute(
-                "SELECT id FROM records ORDER BY id DESC LIMIT 1 OFFSET ?",
-                (MAX_RECORDS,)
-            ).fetchone()
-            if cutoff:
-                conn.execute("DELETE FROM records WHERE id <= ?", (cutoff['id'],))
-                deleted = count - conn.execute("SELECT COUNT(*) FROM records").fetchone()[0]
-                conn.commit()
-                if deleted:
-                    print(f"[DB] trimmed {deleted} records (limit {MAX_RECORDS})")
-        conn.close()
+        try:
+            count = conn.execute("SELECT COUNT(*) FROM records").fetchone()[0]
+            if count > MAX_RECORDS:
+                cutoff = conn.execute(
+                    "SELECT id FROM records ORDER BY id DESC LIMIT 1 OFFSET ?",
+                    (MAX_RECORDS,)
+                ).fetchone()
+                if cutoff:
+                    conn.execute("DELETE FROM records WHERE id <= ?", (cutoff['id'],))
+                    deleted = count - conn.execute("SELECT COUNT(*) FROM records").fetchone()[0]
+                    conn.commit()
+                    if deleted:
+                        print(f"[DB] trimmed {deleted} records (limit {MAX_RECORDS})")
+        except Exception as e:
+            print(f"[DB ERROR] trim: {e}")
+        finally:
+            conn.close()
 
 
 def notify_ws_clients():
@@ -296,7 +301,7 @@ def add_security_headers(resp):
 
 @app.route("/")
 def index():
-    return render_template("index.html", domain=DOMAIN)
+    return render_template("index.html", domain=DOMAIN, ws_port=WS_PORT)
 
 
 @app.route("/api/docs")
@@ -369,15 +374,17 @@ def api_records():
     offset = (page - 1) * limit
     safe = token.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
     conn = get_db()
-    total = conn.execute(
-        "SELECT COUNT(*) FROM records WHERE domain LIKE ? ESCAPE '\\'",
-        (f"%.{safe}.%",)
-    ).fetchone()[0]
-    rows = conn.execute(
-        "SELECT * FROM records WHERE domain LIKE ? ESCAPE '\\' ORDER BY id DESC LIMIT ? OFFSET ?",
-        (f"%.{safe}.%", limit, offset),
-    ).fetchall()
-    conn.close()
+    try:
+        total = conn.execute(
+            "SELECT COUNT(*) FROM records WHERE domain LIKE ? ESCAPE '\\'",
+            (f"%.{safe}.%",)
+        ).fetchone()[0]
+        rows = conn.execute(
+            "SELECT * FROM records WHERE domain LIKE ? ESCAPE '\\' ORDER BY id DESC LIMIT ? OFFSET ?",
+            (f"%.{safe}.%", limit, offset),
+        ).fetchall()
+    finally:
+        conn.close()
     return jsonify({"records": [dict(r) for r in rows], "total": total})
 
 
@@ -389,10 +396,12 @@ def api_clear():
         return jsonify({"error": "token required"}), 400
     with db_lock:
         conn = get_db()
-        safe = token.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
-        conn.execute("DELETE FROM records WHERE domain LIKE ? ESCAPE '\\'", (f"%.{safe}.%",))
-        conn.commit()
-        conn.close()
+        try:
+            safe = token.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
+            conn.execute("DELETE FROM records WHERE domain LIKE ? ESCAPE '\\'", (f"%.{safe}.%",))
+            conn.commit()
+        finally:
+            conn.close()
     notify_ws_clients()
     return jsonify({"ok": True})
 
@@ -408,6 +417,8 @@ def api_random():
 
 
 def main():
+    signal.signal(signal.SIGTERM, lambda *_: _exit_event.set())
+    signal.signal(signal.SIGINT, lambda *_: _exit_event.set())
     init_db()
     if not os.path.isfile(NAMED_LOG):
         print(f"[CONF] WARNING: named_log not found: {NAMED_LOG}")
@@ -433,6 +444,9 @@ def main():
         wd.start()
         print(f"[NAMED] watchdog active, idle timeout {NAMED_IDLE_TIMEOUT}s")
 
+    if WEB_PORT == WS_PORT:
+        print(f"[CONF] ERROR: web_port ({WEB_PORT}) and ws_port ({WS_PORT}) must differ")
+        return
     print(f"[WEB] listening on 0.0.0.0:{WEB_PORT}")
     from gunicorn.app.base import BaseApplication
     class WSGIApp(BaseApplication):
