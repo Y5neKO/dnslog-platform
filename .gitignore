@@ -6,3 +6,4 @@ dnslog.conf
 .idea/
 .vscode/
 *.log
+BUGS.md
