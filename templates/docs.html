@@ -115,24 +115,29 @@ pre .keyword{color:#ff7b72}
 <tr><th>Param</th><th>In</th><th>Required</th><th>Description</th></tr>
 <tr><td><code>code</code></td><td>query / header</td><td>Yes</td><td>Access code</td></tr>
 <tr><td><code>token</code></td><td>query</td><td>Yes</td><td>Token string (first part of domain)</td></tr>
-<tr><td><code>limit</code></td><td>query</td><td>No</td><td>Max records (default: 200)</td></tr>
+<tr><td><code>page</code></td><td>query</td><td>No</td><td>Page number (default: 1)</td></tr>
+<tr><td><code>limit</code></td><td>query</td><td>No</td><td>Records per page (default: 20)</td></tr>
 </table>
 </div>
 <div class="section">
 <h3>Response 200</h3>
-<pre class="response">[
-  {
-    "id": 1,
-    "domain": "test.abc12345.{{ domain }}",
-    "qtype": "A",
-    "src_ip": "1.2.3.4",
-    "created_at": "2026-06-10 05:00:00"
-  }
-]</pre>
+<pre class="response">{
+  "total": 42,
+  "records": [
+    {
+      "id": 1,
+      "domain": "test.abc12345.{{ domain }}",
+      "qtype": "A",
+      "src_ip": "1.2.3.4",
+      "created_at": "2026-06-10 05:00:00"
+    }
+  ]
+}</pre>
 </div>
 <div class="section">
 <h3>Example</h3>
-<pre>curl "http://HOST:{{ web_port }}/api/records?token=abc12345&code=your_access_code"</pre>
+<pre>curl "http://HOST:{{ web_port }}/api/records?token=abc12345&code=your_access_code"
+curl "http://HOST:{{ web_port }}/api/records?token=abc12345&page=2&limit=20&code=your_access_code"</pre>
 </div>
 </div>
 </div>

@@ -33,6 +33,12 @@ tr:hover td{background:#161b22}
 .time{color:#8b949e;white-space:nowrap}
 .qtype{color:#d2a8ff}
 .empty{text-align:center;padding:60px 20px;color:#484f58;font-size:15px}
+.pagination{display:flex;align-items:center;justify-content:center;gap:4px;padding:12px 24px;background:#0d1117;border-top:1px solid #21262d}
+.pagination button{padding:4px 10px;border-radius:4px;border:1px solid #30363d;background:#21262d;color:#c9d1d9;font-size:12px;cursor:pointer;min-width:32px}
+.pagination button:hover:not(:disabled){background:#3d444d}
+.pagination button:disabled{opacity:.3;cursor:default}
+.pagination .info{color:#484f58;font-size:12px;margin:0 8px}
+.pagination .cur{background:#1f6feb;border-color:#1f6feb;color:#fff}
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#238636;margin-right:6px;animation:pulse 1.5s infinite}
 .dot-off{background:#da3633;animation:none}
 .dot-warn{background:#d29922;animation:pulse 1s infinite}
@@ -92,6 +98,7 @@ tr:hover td{background:#161b22}
   </table>
   <div class="empty" id="empty" style="display:block">Click "Get Token" to start monitoring</div>
 </div>
+<div class="pagination hidden" id="pagination"></div>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -102,6 +109,9 @@ let allRecords = [];
 let currentToken = '';
 let lastCount = 0;
 let accessCode = '';
+let currentPage = 1;
+let pageSize = 20;
+let totalRecords = 0;
 
 function showToast(msg, isError) {
   const t = document.getElementById('toast');
@@ -120,27 +130,25 @@ function headers() {
   return { 'X-Access-Code': accessCode };
 }
 
-function render(records, animate) {
-  allRecords = records;
-  document.getElementById('total').textContent = records.length;
-  const uniqueIps = new Set(records.map(r => r.src_ip));
+function renderPage(records, total, animate) {
+  totalRecords = total;
+  document.getElementById('total').textContent = total;
+  const uniqueIps = new Set(allRecords.map(r => r.src_ip));
   document.getElementById('ips').textContent = uniqueIps.size;
-  if (records.length > 0) {
+  if (total > 0) {
     document.getElementById('latest').textContent = records[0].created_at;
   }
   if (!records.length) {
     tbody.innerHTML = '';
     empty.style.display = 'block';
     empty.textContent = currentToken ? 'Waiting for DNS queries...' : 'Click "Get Token" to start monitoring';
+    renderPagination(0);
     return;
   }
   empty.style.display = 'none';
-  const prevCount = lastCount;
-  lastCount = records.length;
-  tbody.innerHTML = records.map((r, i) => {
-    const isNew = animate && i >= prevCount;
+  tbody.innerHTML = records.map(r => {
     const esc = escapeHtml(r.domain).replace(/'/g, "\\'");
-    return `<tr class="${isNew ? 'new-row' : ''}">
+    return `<tr class="${animate ? 'new-row' : ''}">
       <td style="color:#484f58">${r.id}</td>
       <td class="domain" onclick="copyText('${esc}')">${escapeHtml(r.domain)}</td>
       <td class="qtype">${escapeHtml(r.qtype)}</td>
@@ -149,14 +157,42 @@ function render(records, animate) {
       <td><button class="btn-copy" style="padding:4px 10px;font-size:12px" onclick="copyText('${esc}')">Copy</button></td>
     </tr>`;
   }).join('');
+  renderPagination(total);
+}
+
+function renderPagination(total) {
+  const el = document.getElementById('pagination');
+  const pages = Math.ceil(total / pageSize);
+  if (pages <= 1) { el.classList.add('hidden'); return; }
+  el.classList.remove('hidden');
+  let html = `<button ${currentPage <= 1 ? 'disabled' : ''} onclick="goPage(${currentPage - 1})">&lt;</button>`;
+  const range = 2;
+  for (let i = 1; i <= pages; i++) {
+    if (i === 1 || i === pages || (i >= currentPage - range && i <= currentPage + range)) {
+      html += `<button class="${i === currentPage ? 'cur' : ''}" onclick="goPage(${i})">${i}</button>`;
+    } else if (i === currentPage - range - 1 || i === currentPage + range + 1) {
+      html += `<span class="info">...</span>`;
+    }
+  }
+  html += `<button ${currentPage >= pages ? 'disabled' : ''} onclick="goPage(${currentPage + 1})">&gt;</button>`;
+  html += `<span class="info">${total} total</span>`;
+  el.innerHTML = html;
+}
+
+function goPage(page) {
+  currentPage = page;
+  fetchRecords(false);
 }
 
 async function fetchRecords(animate) {
   if (!currentToken) return;
   try {
-    const res = await fetch('/api/records?token=' + encodeURIComponent(currentToken), { headers: headers() });
+    const res = await fetch(`/api/records?token=${encodeURIComponent(currentToken)}&page=${currentPage}&limit=${pageSize}`, { headers: headers() });
     if (res.status === 401) { logout(); return; }
-    render(await res.json(), animate);
+    const data = await res.json();
+    if (!allRecords.length || animate) allRecords = data.records;
+    else allRecords = data.records;
+    renderPage(data.records, data.total, animate);
   } catch (e) { console.error(e); }
 }
 
@@ -170,6 +206,7 @@ async function genRandom() {
     localStorage.setItem('dnslog_token', currentToken);
     localStorage.setItem('dnslog_domain', domain);
     lastCount = 0;
+    currentPage = 1;
     document.getElementById('tokenDisplay').textContent = domain;
     document.getElementById('tokenHint').textContent = 'Monitoring queries for this token';
     fetchRecords(false);
@@ -209,6 +246,7 @@ function showApp() {
   document.getElementById('tokenBar').classList.remove('hidden');
   document.getElementById('statsBar').classList.remove('hidden');
   document.getElementById('tableWrap').classList.remove('hidden');
+  document.getElementById('pagination').classList.remove('hidden');
 }
 
 function logout() {

@@ -300,15 +300,20 @@ def api_named_control(action):
 def api_records():
     token = request.args.get("token", "").strip()
     if not token:
-        return jsonify([])
-    limit = request.args.get("limit", 200, type=int)
+        return jsonify({"records": [], "total": 0})
+    page = request.args.get("page", 1, type=int)
+    limit = request.args.get("limit", 20, type=int)
+    offset = (page - 1) * limit
     conn = get_db()
+    total = conn.execute(
+        "SELECT COUNT(*) FROM records WHERE domain LIKE ?", (f"%.{token}.%",)
+    ).fetchone()[0]
     rows = conn.execute(
-        "SELECT * FROM records WHERE domain LIKE ? ORDER BY id DESC LIMIT ?",
-        (f"%.{token}.%", limit),
+        "SELECT * FROM records WHERE domain LIKE ? ORDER BY id DESC LIMIT ? OFFSET ?",
+        (f"%.{token}.%", limit, offset),
     ).fetchall()
     conn.close()
-    return jsonify([dict(r) for r in rows])
+    return jsonify({"records": [dict(r) for r in rows], "total": total})
 
 
 @app.route("/api/records", methods=["DELETE"])
