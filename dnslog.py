@@ -31,6 +31,7 @@ WEB_PORT = cfg.getint("web", "port", fallback=9090)
 WS_PORT = cfg.getint("web", "ws_port", fallback=9091)
 ACCESS_CODE = cfg.get("web", "access_code", fallback="")
 MAX_RECORDS = cfg.getint("database", "max_records", fallback=5000)
+NAMED_IDLE_TIMEOUT = cfg.getint("dnslog", "named_idle_timeout", fallback=0)
 
 app = Flask(__name__)
 
@@ -43,6 +44,8 @@ LOG_PATTERN = re.compile(
 ws_clients = []
 ws_lock = threading.Lock()
 ws_loop = None
+last_token_time = 0
+named_lock = threading.Lock()
 
 
 def require_access_code(f):
@@ -53,6 +56,44 @@ def require_access_code(f):
             return jsonify({"error": "unauthorized"}), 401
         return f(*args, **kwargs)
     return decorated
+
+
+def named_ensure_running():
+    if NAMED_IDLE_TIMEOUT <= 0:
+        return
+    with named_lock:
+        try:
+            r = subprocess.run(["sudo", "systemctl", "is-active", "named"],
+                               capture_output=True, text=True)
+            if r.stdout.strip() != "active":
+                subprocess.run(["sudo", "systemctl", "start", "named"],
+                               capture_output=True)
+                print("[NAMED] started (token requested)")
+        except Exception as e:
+            print(f"[NAMED] start error: {e}")
+
+
+def named_stop():
+    if NAMED_IDLE_TIMEOUT <= 0:
+        return
+    with named_lock:
+        try:
+            subprocess.run(["sudo", "systemctl", "stop", "named"],
+                           capture_output=True)
+            print("[NAMED] stopped (idle timeout)")
+        except Exception as e:
+            print(f"[NAMED] stop error: {e}")
+
+
+def named_watchdog():
+    global last_token_time
+    if NAMED_IDLE_TIMEOUT <= 0:
+        return
+    while True:
+        time.sleep(30)
+        with named_lock:
+            if last_token_time > 0 and time.time() - last_token_time > NAMED_IDLE_TIMEOUT:
+                named_stop()
 
 
 def get_db():
@@ -243,6 +284,9 @@ def api_clear():
 @app.route("/api/random")
 @require_access_code
 def api_random():
+    global last_token_time
+    named_ensure_running()
+    last_token_time = time.time()
     s = "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
     return jsonify({"domain": f"{s}.{DOMAIN}"})
 
@@ -256,6 +300,11 @@ def main():
 
     tailer = threading.Thread(target=tail_named_log, daemon=True)
     tailer.start()
+
+    if NAMED_IDLE_TIMEOUT > 0:
+        wd = threading.Thread(target=named_watchdog, daemon=True)
+        wd.start()
+        print(f"[NAMED] watchdog active, idle timeout {NAMED_IDLE_TIMEOUT}s")
 
     print(f"[WEB] listening on 0.0.0.0:{WEB_PORT}")
     from gunicorn.app.base import BaseApplication

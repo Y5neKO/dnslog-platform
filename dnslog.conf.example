@@ -2,6 +2,7 @@
 domain = log.example.com
 server_ip = 0.0.0.0
 named_log = /var/log/named/query.log
+named_idle_timeout = 600
 
 [web]
 port = 9090
