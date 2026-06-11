@@ -3,6 +3,7 @@
 
 import asyncio
 import configparser
+import hmac
 import json
 import os
 import random
@@ -14,7 +15,7 @@ import threading
 import time
 from functools import wraps
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, make_response
 import websockets
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -45,14 +46,20 @@ ws_clients = []
 ws_lock = threading.Lock()
 ws_loop = None
 last_token_time = 0
-named_lock = threading.Lock()
+named_lock = threading.RLock()
+
+
+def _check_code(code):
+    if not ACCESS_CODE:
+        return False
+    return hmac.compare_digest(code, ACCESS_CODE)
 
 
 def require_access_code(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         code = request.args.get("code", "").strip() or request.headers.get("X-Access-Code", "").strip()
-        if code != ACCESS_CODE:
+        if not _check_code(code):
             return jsonify({"error": "unauthorized"}), 401
         return f(*args, **kwargs)
     return decorated
@@ -93,7 +100,12 @@ def named_watchdog():
         time.sleep(30)
         with named_lock:
             if last_token_time > 0 and time.time() - last_token_time > NAMED_IDLE_TIMEOUT:
-                named_stop()
+                try:
+                    subprocess.run(["sudo", "systemctl", "stop", "named"],
+                                   capture_output=True)
+                    print("[NAMED] stopped (idle timeout)")
+                except Exception as e:
+                    print(f"[NAMED] stop error: {e}")
 
 
 def get_db():
@@ -113,7 +125,7 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    conn.execute("UPDATE records SET domain=LOWER(domain)")
+    conn.execute("UPDATE records SET domain=LOWER(domain) WHERE domain != LOWER(domain)")
     conn.commit()
     conn.close()
 
@@ -125,28 +137,32 @@ def trim_records():
         conn = get_db()
         count = conn.execute("SELECT COUNT(*) FROM records").fetchone()[0]
         if count > MAX_RECORDS:
-            conn.execute(
-                "DELETE FROM records WHERE id NOT IN (SELECT id FROM records ORDER BY id DESC LIMIT ?)",
+            cutoff = conn.execute(
+                "SELECT id FROM records ORDER BY id DESC LIMIT 1 OFFSET ?",
                 (MAX_RECORDS,)
-            )
-            deleted = count - conn.execute("SELECT COUNT(*) FROM records").fetchone()[0]
-            conn.commit()
-            if deleted:
-                print(f"[DB] trimmed {deleted} records (limit {MAX_RECORDS})")
+            ).fetchone()
+            if cutoff:
+                conn.execute("DELETE FROM records WHERE id <= ?", (cutoff['id'],))
+                deleted = count - conn.execute("SELECT COUNT(*) FROM records").fetchone()[0]
+                conn.commit()
+                if deleted:
+                    print(f"[DB] trimmed {deleted} records (limit {MAX_RECORDS})")
         conn.close()
 
 
 def notify_ws_clients():
+    if ws_loop is None:
+        return
     with ws_lock:
         dead = []
         for ws in ws_clients:
             try:
-                asyncio.run_coroutine_threadsafe(ws.send("update"), ws_loop)
+                fut = asyncio.run_coroutine_threadsafe(ws.send("update"), ws_loop)
+                fut.add_done_callback(lambda f: f.exception() if not f.cancelled() else None)
             except Exception:
                 dead.append(ws)
         for ws in dead:
-            if ws in ws_clients:
-                ws_clients.remove(ws)
+            ws_clients.remove(ws)
 
 
 def insert_record(domain, qtype_name, src_ip):
@@ -176,6 +192,7 @@ def insert_record(domain, qtype_name, src_ip):
 def tail_named_log():
     print(f"[TAIL] watching {NAMED_LOG}")
     while True:
+        proc = None
         try:
             proc = subprocess.Popen(
                 ["tail", "-n", "+1", "-F", NAMED_LOG],
@@ -194,14 +211,23 @@ def tail_named_log():
                     insert_record(domain, qtype, src_ip)
         except Exception as e:
             print(f"[TAIL] error: {e}")
+            if proc:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=5)
+                except Exception:
+                    pass
             time.sleep(2)
 
 
-async def websocket_handler(websocket, path=None):
+async def websocket_handler(websocket):
+    if not ACCESS_CODE:
+        await websocket.close(1008, "no access code configured")
+        return
     try:
         msg = await asyncio.wait_for(websocket.recv(), timeout=5)
         data = json.loads(msg)
-        if data.get("code") != ACCESS_CODE:
+        if not _check_code(data.get("code", "")):
             await websocket.close(1008, "unauthorized")
             return
     except Exception:
@@ -231,10 +257,16 @@ def start_websocket():
     loop.run_until_complete(serve())
 
 
+@app.after_request
+def add_no_cache(resp):
+    if request.path in ("/", "/api/docs"):
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return resp
+
+
 @app.route("/")
 def index():
-    resp = render_template("index.html", domain=DOMAIN)
-    return resp.replace("<head>", "<head><meta http-equiv='Cache-Control' content='no-cache, no-store, must-revalidate'>")
+    return render_template("index.html", domain=DOMAIN)
 
 
 @app.route("/api/docs")
@@ -245,7 +277,7 @@ def api_docs():
 @app.route("/api/auth", methods=["POST"])
 def api_auth():
     data = request.get_json(silent=True) or {}
-    if data.get("code", "").strip() == ACCESS_CODE:
+    if _check_code(data.get("code", "").strip()):
         return jsonify({"ok": True})
     return jsonify({"error": "wrong code"}), 403
 
@@ -254,23 +286,15 @@ def api_auth():
 @require_access_code
 def api_status():
     named_active = False
+    try:
+        r = subprocess.run(["sudo", "systemctl", "is-active", "named"],
+                           capture_output=True, text=True)
+        named_active = r.stdout.strip() == "active"
+    except Exception:
+        pass
     remaining = 0
-    if NAMED_IDLE_TIMEOUT > 0:
-        try:
-            r = subprocess.run(["sudo", "systemctl", "is-active", "named"],
-                               capture_output=True, text=True)
-            named_active = r.stdout.strip() == "active"
-        except Exception:
-            pass
-        if named_active and last_token_time > 0:
-            remaining = max(0, int(NAMED_IDLE_TIMEOUT - (time.time() - last_token_time)))
-    else:
-        try:
-            r = subprocess.run(["sudo", "systemctl", "is-active", "named"],
-                               capture_output=True, text=True)
-            named_active = r.stdout.strip() == "active"
-        except Exception:
-            pass
+    if named_active and last_token_time > 0:
+        remaining = max(0, int(NAMED_IDLE_TIMEOUT - (time.time() - last_token_time)))
     return jsonify({
         "named": named_active,
         "remaining": remaining,
@@ -304,13 +328,15 @@ def api_records():
     page = request.args.get("page", 1, type=int)
     limit = request.args.get("limit", 20, type=int)
     offset = (page - 1) * limit
+    safe = token.replace("%", r"\%").replace("_", r"\_")
     conn = get_db()
     total = conn.execute(
-        "SELECT COUNT(*) FROM records WHERE domain LIKE ?", (f"%.{token}.%",)
+        "SELECT COUNT(*) FROM records WHERE domain LIKE ? ESCAPE '\\'",
+        (f"%.{safe}.%",)
     ).fetchone()[0]
     rows = conn.execute(
-        "SELECT * FROM records WHERE domain LIKE ? ORDER BY id DESC LIMIT ? OFFSET ?",
-        (f"%.{token}.%", limit, offset),
+        "SELECT * FROM records WHERE domain LIKE ? ESCAPE '\\' ORDER BY id DESC LIMIT ? OFFSET ?",
+        (f"%.{safe}.%", limit, offset),
     ).fetchall()
     conn.close()
     return jsonify({"records": [dict(r) for r in rows], "total": total})
@@ -320,13 +346,14 @@ def api_records():
 @require_access_code
 def api_clear():
     token = request.args.get("token", "").strip()
-    conn = get_db()
-    if token:
-        conn.execute("DELETE FROM records WHERE domain LIKE ?", (f"%.{token}.%",))
-    else:
-        conn.execute("DELETE FROM records")
-    conn.commit()
-    conn.close()
+    with db_lock:
+        conn = get_db()
+        if token:
+            conn.execute("DELETE FROM records WHERE domain LIKE ?", (f"%.{token}.%",))
+        else:
+            conn.execute("DELETE FROM records")
+        conn.commit()
+        conn.close()
     notify_ws_clients()
     return jsonify({"ok": True})
 
